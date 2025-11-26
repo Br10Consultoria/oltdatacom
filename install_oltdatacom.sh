@@ -20,7 +20,7 @@ echo "[2/5] Instalando Docker e Docker Compose plugin..."
 apt-get install -y docker.io docker-compose-plugin
 
 echo "[3/5] (Opcional) Instalando servidor TFTP (tftpd-hpa)..."
-apt-get install -y tftpd-hpa
+apt-get install -y sudo
 
 echo "[4/5] Habilitando e iniciando Docker..."
 systemctl enable docker
