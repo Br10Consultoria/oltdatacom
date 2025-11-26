@@ -1,0 +1,10 @@
+services:
+  oltdatacom-backup:
+    build: .
+    container_name: oltdatacom-backup
+    restart: unless-stopped
+    env_file:
+      - .env
+    # Se quiser ver os logs no host:
+    volumes:
+      - /home/oltdatacom/logs:/var/log/oltdatacom
