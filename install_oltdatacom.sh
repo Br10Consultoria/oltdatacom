@@ -4,7 +4,6 @@ set -e
 # Script de instalação para Debian
 # - Atualiza o sistema
 # - Instala Docker e docker compose plugin
-# - (Opcional) instala TFTP
 # - Sobe o container de backup das OLTs Datacom
 
 if [ "$EUID" -ne 0 ]; then
@@ -19,7 +18,7 @@ apt-get upgrade -y
 echo "[2/5] Instalando Docker e Docker Compose plugin..."
 apt-get install -y docker.io docker-compose-plugin
 
-echo "[3/5] (Opcional) Instalando servidor TFTP (tftpd-hpa)..."
+echo "[3/5] (Opcional) Instalando sudo (sudo)..."
 apt-get install -y sudo
 
 echo "[4/5] Habilitando e iniciando Docker..."
@@ -29,10 +28,6 @@ systemctl start docker
 echo "[5/5] Subindo projeto Docker em /home/oltdatacom..."
 
 cd /home/oltdatacom
-
-# Se você for clonar do GitHub, deixe algo assim:
-# git clone https://github.com/SEU_USUARIO/SEU_REPO.git .
-# e depois rode este script
 
 # Build e subida do container
 docker compose build
