@@ -1,171 +1,96 @@
 import os
 import telnetlib
 import time
-from datetime import datetime
-import sys
+import datetime
+import subprocess
+from dotenv import load_dotenv
+import requests
 
-# ===============================
-# Funções auxiliares de log
-# ===============================
-def log(msg):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {msg}")
-    sys.stdout.flush()
+# Diretórios
+BACKUP_DIR = "/app/backups"
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
+# Carrega variáveis do .env
+load_dotenv()
 
-def send_command(tn, command, wait_time=2):
-    """
-    Envia comando via Telnet e retorna a resposta.
-    """
-    log(f"Enviando comando: {command}")
-    tn.write(command.encode('ascii') + b"\n")
-    time.sleep(wait_time)
-    response = tn.read_very_eager().decode('ascii', errors='ignore')
-    log(f"Resposta (primeiros 200 chars): {response[:200].replace(chr(10), ' ')}")
-    return response
+OLTS = os.getenv("OLTS", "")
+TELNET_PORT = int(os.getenv("TELNET_PORT", 23))
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+today = datetime.datetime.now().strftime("%d%m%Y")
 
-# ===============================
-# Carregar configuração via .env
-# ===============================
-
-# Lista de OLTs Datacom, separadas por vírgula
-# Exemplo no .env:
-# DATACOM_OLTS=OURICANGAS,OURICANGUINHA,POP_FORMIGA
-datacom_olts_env = os.getenv("DATACOM_OLTS", "").strip()
-
-if not datacom_olts_env:
-    log("ERRO: Variável DATACOM_OLTS não definida no .env. Nada a fazer.")
-    sys.exit(1)
-
-OLT_NAMES = [name.strip() for name in datacom_olts_env.split(",") if name.strip()]
-
-# IP do servidor TFTP (onde o arquivo será gravado)
-TFTP_IP = os.getenv("TFTP_IP", "").strip()
-if not TFTP_IP:
-    log("ERRO: Variável TFTP_IP não definida no .env.")
-    sys.exit(1)
-
-
-def get_olt_config(name: str):
-    """
-    Lê as variáveis de ambiente para uma OLT específica.
-    Convenção:
-      <OLT_NAME>_IP
-      <OLT_NAME>_USER
-      <OLT_NAME>_PASSWORD
-      <OLT_NAME>_PORT (opcional, padrão 23)
-    """
-    prefix = name.upper()
-    ip = os.getenv(f"{prefix}_IP", "").strip()
-    user = os.getenv(f"{prefix}_USER", "").strip()
-    password = os.getenv(f"{prefix}_PASSWORD", "").strip()
-    port = int(os.getenv(f"{prefix}_PORT", "23"))
-
-    if not ip or not user or not password:
-        log(f"ERRO: Configuração incompleta para OLT {name}. "
-            f"Verifique {prefix}_IP, {prefix}_USER e {prefix}_PASSWORD no .env")
-        return None
-
-    return {
-        "name": name,
-        "ip": ip,
-        "user": user,
-        "password": password,
-        "port": port,
+def send_telegram_message(message, file_path=None):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "HTML"
     }
-
-
-# ===============================
-# Função de backup Datacom
-# ===============================
-
-def backup_olt_datacom(olt_cfg: dict):
-    """
-    Executa o backup de uma OLT Datacom via Telnet,
-    salva o arquivo localmente na OLT (save <arquivo>)
-    e depois copia via TFTP para o servidor configurado.
-    """
-    olt_name = olt_cfg["name"]
-    ip = olt_cfg["ip"]
-    user = olt_cfg["user"]
-    password = olt_cfg["password"]
-    port = olt_cfg["port"]
-
     try:
-        log(f"Conectando à OLT Datacom {olt_name} ({ip}:{port}) via Telnet...")
+        requests.post(url, data=payload)
+    except Exception as e:
+        print(f"Erro ao enviar mensagem: {e}")
 
-        tn = telnetlib.Telnet(ip, port, timeout=10)
+    if file_path:
+        try:
+            url_doc = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
+            with open(file_path, 'rb') as f:
+                files = {'document': f}
+                data = {'chat_id': TELEGRAM_CHAT_ID}
+                requests.post(url_doc, files=files, data=data)
+        except Exception as e:
+            print(f"Erro ao enviar arquivo: {e}")
 
-        # Login
-        log("Aguardando 'login:'...")
-        tn.read_until(b"login:", timeout=10)
-        log(f"Enviando usuário: {user}")
-        tn.write(user.encode('ascii') + b"\n")
+def backup_olt(ip, tipo, username, password):
+    try:
+        print(f"Conectando na OLT {ip} via Telnet...")
+        tn = telnetlib.Telnet(ip, TELNET_PORT, timeout=10)
 
-        log("Aguardando 'Password:'...")
-        tn.read_until(b"Password:", timeout=10)
+        tn.read_until(b"Username:")
+        tn.write(username.encode('ascii') + b"\n")
+        tn.read_until(b"Password:")
         tn.write(password.encode('ascii') + b"\n")
 
-        # Mensagem de boas-vindas do DmOS
-        log("Aguardando 'Welcome to the DmOS CLI'...")
-        tn.read_until(b"Welcome to the DmOS CLI", timeout=10)
-        log(f"Conexão estabelecida com a OLT {olt_name}")
+        time.sleep(1)
+        tn.write(b"enable\n")
+        tn.write(b"configure terminal\n")
 
-        # Entrar no modo de configuração
-        send_command(tn, "config", wait_time=2)
-
-        # Gerar o nome do arquivo de backup com base na OLT e na data/hora
-        current_date_time = datetime.now().strftime("%d%m%y_%H%M")
-        backup_filename = f"backupolt_{olt_name.lower()}_{current_date_time}.txt"
-        log(f"Nome do arquivo de backup na OLT: {backup_filename}")
-
-        # Comando para salvar o backup na OLT
-        send_command(tn, f"save {backup_filename}", wait_time=5)
-
-        # Aguarda para garantir que o arquivo foi salvo
-        log("Aguardando 60 segundos para garantir gravação do backup na OLT...")
-        time.sleep(60)
-
-        # Enviar o arquivo salvo para o servidor TFTP
-        tftp_cmd = f"copy file {backup_filename} tftp://{TFTP_IP}"
-        log(f"Enviando arquivo para TFTP: {tftp_cmd}")
-        send_command(tn, tftp_cmd, wait_time=10)
-
-        # Aguardar mensagem "Transfer complete."
-        try:
-            tn.read_until(b"Transfer complete.", timeout=60)
-            log(f"Backup da OLT {olt_name} transferido com sucesso para o TFTP {TFTP_IP}.")
-        except EOFError:
-            log(f"ATENÇÃO: Não foi possível confirmar 'Transfer complete.' para a OLT {olt_name}. "
-                f"Verifique manualmente no servidor TFTP.")
-
-        # Sair
+        filename = f"bkup_{ip.replace('.', '_')}_{today}.cfg"
+        tn.write(f"show running-config | save overwrite {filename}\n".encode('ascii'))
+        time.sleep(3)
         tn.write(b"exit\n")
-        tn.close()
-        log(f"Backup da OLT {olt_name} concluído.")
+        tn.write(b"exit\n")
+
+        print(f"Arquivo salvo na OLT: {filename}")
+
+        local_path = os.path.join(BACKUP_DIR, filename)
+        scp_cmd = (
+            f"sshpass -p {password} scp -P 22 "
+            f"{username}@{ip}:{filename} {local_path}"
+        )
+
+        print("Baixando arquivo via SCP...")
+        result = subprocess.run(scp_cmd, shell=True, capture_output=True, text=True)
+
+        if result.returncode == 0:
+            print("Backup baixado com sucesso.")
+            send_telegram_message(f"✅ Backup da OLT {ip} concluído!", file_path=local_path)
+        else:
+            raise Exception(result.stderr)
 
     except Exception as e:
-        log(f"ERRO ao fazer backup da OLT {olt_name}: {e}")
+        send_telegram_message(f"❌ Falha ao fazer backup da OLT {ip}: {e}")
 
-
-# ===============================
-# Função principal
-# ===============================
-
-def run_backups():
-    log("=== Iniciando backups de OLTs Datacom ===")
-
-    for name in OLT_NAMES:
-        log(f"Processando OLT: {name}")
-        cfg = get_olt_config(name)
-        if not cfg:
-            log(f"Pulando OLT {name} por configuração incompleta.")
+def main():
+    for olt in OLTS.split(";"):
+        try:
+            ip, tipo, user, passwd = olt.strip().split(",")
+            if tipo.lower() == "datacom":
+                backup_olt(ip, tipo, user, passwd)
+        except ValueError:
+            print(f"Erro no formato da linha: {olt}")
             continue
-        backup_olt_datacom(cfg)
-
-    log("=== Processo de backup concluído para todas as OLTs configuradas ===")
-
 
 if __name__ == "__main__":
-    run_backups()
+    main()
