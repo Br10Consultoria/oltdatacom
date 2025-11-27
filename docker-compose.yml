@@ -1,12 +1,14 @@
 services:
-  oltdatacom-backup:
+  olt-backup:
     build: .
-    container_name: oltdatacom-backup
+    container_name: olt-backup-datacom
+    network_mode: "host"
     restart: unless-stopped
     env_file:
       - .env
-    # Se quiser ver os logs no host:
     volumes:
-      - /home/oltdatacom/backups:/app/backups
-      - /home/oltdatacom/logs:/var/log
-
+      - ./logs:/home/oltdatacom/logs
+      - ./backups:/home/oltdatacom/backups
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - TZ=America/Bahia
